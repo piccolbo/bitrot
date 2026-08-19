@@ -101,22 +101,46 @@ def get_sqlite3_cursor(path, copy=False):
     return conn
 
 
-def list_existing_paths(directory, expected=(), ignored=(), follow_links=False):
-    """list_existing_paths(b'/dir') -> ([path1, path2, ...], total_size)
+def collect_paths(roots, recursive, expected=(), ignored=(), follow_links=False):
+    """Collect files to be checked.
 
-    Returns a tuple with a set of existing files in `directory` and its subdirectories
-    and their `total_size`. If directory was a bytes object, so will be the returned
-    paths.
+    roots: iterable of byte paths (if strings are provided they should be
+    encoded by the caller).
+    recursive: whether to walk directories recursively.
+    expected: set of Unicode paths that should be treated as follow-links targets.
+    ignored: set of byte paths to ignore (typically the database files).
+    follow_links: global follow links flag.
 
-    Doesn't add entries listed in `ignored`.  Doesn't add symlinks if
-    `follow_links` is False (the default).  All entries present in `expected`
-    must be files (can't be directories or symlinks).
+    Returns (paths_set, total_size) where paths_set contains byte paths.
     """
+    if not roots:
+        roots = [b'.']
     paths = set()
     total_size = 0
-    for path, _, files in os.walk(directory):
-        for f in files:
-            p = os.path.join(path, f)
+
+    for root in roots:
+        # Ensure root is bytes
+        if isinstance(root, str):
+            root = root.encode(FSENCODING)
+
+        try:
+            st_root = os.lstat(root)
+        except OSError as ex:
+            if ex.errno in IGNORED_FILE_SYSTEM_ERRORS:
+                # skip missing/unreadable roots
+                binary_stderr = getattr(sys.stderr, 'buffer', sys.stderr)
+                binary_stderr.write(b"warning: cannot access root: ")
+                try:
+                    binary_stderr.write(root)
+                except Exception:
+                    pass
+                binary_stderr.write(b"\n")
+                continue
+            raise
+
+        if stat.S_ISREG(st_root.st_mode):
+            # Single file root
+            p = root
             try:
                 p_uni = p.decode(FSENCODING)
             except UnicodeDecodeError:
@@ -127,6 +151,7 @@ def list_existing_paths(directory, expected=(), ignored=(), follow_links=False):
                 continue
 
             try:
+                # follow if requested globally or if it's in expected list
                 if follow_links or p_uni in expected:
                     st = os.stat(p)
                 else:
@@ -134,11 +159,78 @@ def list_existing_paths(directory, expected=(), ignored=(), follow_links=False):
             except OSError as ex:
                 if ex.errno not in IGNORED_FILE_SYSTEM_ERRORS:
                     raise
+                continue
+
+            if not stat.S_ISREG(st.st_mode) or p in ignored:
+                continue
+            paths.add(p)
+            total_size += st.st_size
+            continue
+
+        if stat.S_ISDIR(st_root.st_mode):
+            if recursive:
+                for dirpath, _, files in os.walk(root):
+                    for f in files:
+                        p = os.path.join(dirpath, f)
+                        try:
+                            p_uni = p.decode(FSENCODING)
+                        except UnicodeDecodeError:
+                            binary_stderr = getattr(sys.stderr, 'buffer', sys.stderr)
+                            binary_stderr.write(b"warning: cannot decode file name: ")
+                            binary_stderr.write(p)
+                            binary_stderr.write(b"\n")
+                            continue
+
+                        try:
+                            if follow_links or p_uni in expected:
+                                st = os.stat(p)
+                            else:
+                                st = os.lstat(p)
+                        except OSError as ex:
+                            if ex.errno not in IGNORED_FILE_SYSTEM_ERRORS:
+                                raise
+                            continue
+
+                        if not stat.S_ISREG(st.st_mode) or p in ignored:
+                            continue
+                        paths.add(p)
+                        total_size += st.st_size
             else:
-                if not stat.S_ISREG(st.st_mode) or p in ignored:
-                    continue
-                paths.add(p)
-                total_size += st.st_size
+                # Non-recursive: only immediate children
+                try:
+                    entries = os.listdir(root)
+                except OSError as ex:
+                    if ex.errno in IGNORED_FILE_SYSTEM_ERRORS:
+                        continue
+                    raise
+                for entry in entries:
+                    p = os.path.join(root, entry)
+                    try:
+                        p_uni = p.decode(FSENCODING)
+                    except UnicodeDecodeError:
+                        binary_stderr = getattr(sys.stderr, 'buffer', sys.stderr)
+                        binary_stderr.write(b"warning: cannot decode file name: ")
+                        binary_stderr.write(p)
+                        binary_stderr.write(b"\n")
+                        continue
+
+                    try:
+                        if follow_links or p_uni in expected:
+                            st = os.stat(p)
+                        else:
+                            st = os.lstat(p)
+                    except OSError as ex:
+                        if ex.errno not in IGNORED_FILE_SYSTEM_ERRORS:
+                            raise
+                        continue
+
+                    if not stat.S_ISREG(st.st_mode) or p in ignored:
+                        continue
+                    paths.add(p)
+                    total_size += st.st_size
+            continue
+
+        # Other file types are ignored
     return paths, total_size
 
 
@@ -203,7 +295,7 @@ class Bitrot(object):
         conn.commit()
         self._last_commit_ts = time.time()
 
-    def run(self):
+    def run(self, roots=None, recursive=True):
         check_sha512_integrity(verbosity=self.verbosity)
 
         bitrot_db = get_path()
@@ -224,8 +316,11 @@ class Bitrot(object):
         current_size = 0
         missing_paths = self.select_all_paths(cur)
         hashes = self.select_all_hashes(cur)
-        paths, total_size = list_existing_paths(
-            b'.', expected=missing_paths, ignored={bitrot_db, bitrot_sha512},
+
+        # Collect filesystem paths according to user-specified roots and recursion
+        paths, total_size = collect_paths(
+            roots, recursive,
+            expected=missing_paths, ignored={bitrot_db, bitrot_sha512},
             follow_links=self.follow_links,
         )
         paths_uni = set(normalize_path(p) for p in paths)
@@ -312,6 +407,10 @@ class Bitrot(object):
         update_sha512_integrity(verbosity=self.verbosity)
 
         if errors:
+            # Print plain list of mismatched files to stdout so pipelines can act on it.
+            for p in errors:
+                # p is Unicode
+                print(p)
             raise BitrotException(
                 1, 'There were {} errors found.'.format(len(errors)), errors,
             )
@@ -344,20 +443,28 @@ class Bitrot(object):
         return result
 
     def report_progress(self, current_size, total_size):
+        # Progress output is human-oriented; write to stderr so stdout stays
+        # machine-friendly (pipelines can capture stdout without progress noise).
+        # Also only show progress when stderr is a TTY.
+        if not sys.stderr.isatty():
+            return
         size_fmt = '\r{:>6.1%}'.format(current_size/(total_size or 1))
         if size_fmt == self._last_reported_size:
             return
 
-        sys.stdout.write(size_fmt)
-        sys.stdout.flush()
+        sys.stderr.write(size_fmt)
+        sys.stderr.flush()
         self._last_reported_size = size_fmt
 
     def report_done(
         self, total_size, all_count, error_count, new_paths, updated_paths,
         renamed_paths, missing_paths):
         """Print a report on what happened.  All paths should be Unicode here."""
+        # Human-readable summary; send to stderr so stdout remains suitable for
+        # piping or further processing.
         print('\rFinished. {:.2f} MiB of data read. {} errors found.'
-            ''.format(total_size/1024/1024, error_count))
+            ''.format(total_size/1024/1024, error_count),
+            file=sys.stderr)
         if self.verbosity == 1:
             print(
                 '{} entries in the database, {} new, {} updated, '
@@ -365,21 +472,22 @@ class Bitrot(object):
                     all_count, len(new_paths), len(updated_paths),
                     len(renamed_paths), len(missing_paths),
                 ),
+                file=sys.stderr,
             )
         elif self.verbosity > 1:
-            print('{} entries in the database.'.format(all_count), end=' ')
+            print('{} entries in the database.'.format(all_count), end=' ', file=sys.stderr)
             if new_paths:
-                print('{} entries new:'.format(len(new_paths)))
+                print('{} entries new:'.format(len(new_paths)), file=sys.stderr)
                 new_paths.sort()
                 for path in new_paths:
-                    print(' ', path)
+                    print(' ', path, file=sys.stderr)
             if updated_paths:
-                print('{} entries updated:'.format(len(updated_paths)))
+                print('{} entries updated:'.format(len(updated_paths)), file=sys.stderr)
                 updated_paths.sort()
                 for path in updated_paths:
-                    print(' ', path)
+                    print(' ', path, file=sys.stderr)
             if renamed_paths:
-                print('{} entries renamed:'.format(len(renamed_paths)))
+                print('{} entries renamed:'.format(len(renamed_paths)), file=sys.stderr)
                 renamed_paths.sort()
                 for path in renamed_paths:
                     print(
@@ -387,16 +495,17 @@ class Bitrot(object):
                         path[0],
                         'to',
                         path[1],
+                        file=sys.stderr,
                     )
             if missing_paths:
-                print('{} entries missing:'.format(len(missing_paths)))
+                print('{} entries missing:'.format(len(missing_paths)), file=sys.stderr)
                 missing_paths = sorted(missing_paths)
                 for path in missing_paths:
-                    print(' ', path)
+                    print(' ', path, file=sys.stderr)
             if not any((new_paths, updated_paths, missing_paths)):
-                print()
+                print(file=sys.stderr)
         if self.test and self.verbosity:
-            print('warning: database file not updated on disk (test mode).')
+            print('warning: database file not updated on disk (test mode).', file=sys.stderr)
 
     def handle_unknown_path(self, cur, new_path, new_mtime, new_sha1, paths_uni, hashes):
         """Either add a new entry to the database or update the existing entry
@@ -411,7 +520,7 @@ class Bitrot(object):
         outdated path stored in the database for this hash) if there was a rename.
         """
 
-        for old_path in hashes.get(new_sha1, ()):
+        for old_path in hashes.get(new_sha1, ()): 
             if old_path not in paths_uni:
                 # File of the same hash used to exist but no longer does.
                 # Let's treat `new_path` as a renamed version of that `old_path`.
@@ -430,6 +539,7 @@ class Bitrot(object):
                 (new_path, new_mtime, new_sha1, ts()),
             )
             return new_path
+
 
 def get_path(directory=b'.', ext=b'db'):
     """Compose the path to the selected bitrot file."""
@@ -460,8 +570,9 @@ def check_sha512_integrity(verbosity=1):
         return
 
     if verbosity:
-        print('Checking bitrot.db integrity... ', end='')
-        sys.stdout.flush()
+        # Integrity checks are human-oriented; send messages to stderr.
+        print('Checking bitrot.db integrity... ', end='', file=sys.stderr)
+        sys.stderr.flush()
     with open(sha512_path, 'rb') as f:
         old_sha512 = f.read().strip()
     bitrot_db = get_path()
@@ -475,11 +586,13 @@ def check_sha512_integrity(verbosity=1):
                 print(
                     "error: SHA512 of the file is different, bitrot.db might "
                     "be corrupt.",
+                    file=sys.stderr,
                 )
             else:
                 print(
                     "error: SHA512 of the file is different but bitrot.sha512 "
                     "has a suspicious length. It might be corrupt.",
+                    file=sys.stderr,
                 )
             print(
                 "If you'd like to continue anyway, delete the .bitrot.sha512 "
@@ -491,7 +604,8 @@ def check_sha512_integrity(verbosity=1):
         )
 
     if verbosity:
-        print('ok.')
+        print('ok.', file=sys.stderr)
+
 
 def update_sha512_integrity(verbosity=1):
     old_sha512 = 0
@@ -506,12 +620,13 @@ def update_sha512_integrity(verbosity=1):
     new_sha512 = digest.hexdigest().encode('ascii')
     if new_sha512 != old_sha512:
         if verbosity:
-            print('Updating bitrot.sha512... ', end='')
-            sys.stdout.flush()
+            print('Updating bitrot.sha512... ', end='', file=sys.stderr)
+            sys.stderr.flush()
         with open(sha512_path, 'wb') as f:
             f.write(new_sha512)
         if verbosity:
-            print('done.')
+            print('done.', file=sys.stderr)
+
 
 def run_from_command_line():
     global FSENCODING
@@ -558,33 +673,69 @@ def run_from_command_line():
         '--fsencoding', default='',
         help='override the codec to decode filenames, otherwise taken from '
              'the LANG environment variables')
+    parser.add_argument(
+        '-n', '--no-recursive', action='store_true',
+        help='do not recurse into directories; only check immediate files')
+    parser.add_argument(
+        'paths', nargs='*',
+        help='files or directories to check; if omitted defaults to current directory; use - to read newline-separated paths from stdin')
     args = parser.parse_args()
+
+    if args.fsencoding:
+        FSENCODING = args.fsencoding
+
     if args.sum:
         try:
             print(stable_sum())
         except RuntimeError as e:
             print(str(e).encode('utf8'), file=sys.stderr)
+        return
+
+    # Determine roots to check: positional args, or stdin if '-' present or
+    # if no args and stdin is not a TTY.
+    roots = []
+    if args.paths:
+        if len(args.paths) == 1 and args.paths[0] == '-':
+            # Read newline-separated paths from stdin (text)
+            data = sys.stdin.read().splitlines()
+            for line in data:
+                if not line:
+                    continue
+                # preserve as bytes for filesystem ops
+                roots.append(line.encode(FSENCODING))
+        else:
+            for p in args.paths:
+                roots.append(p.encode(FSENCODING))
     else:
-        verbosity = 1
-        if args.quiet:
-            verbosity = 0
-        elif args.verbose:
-            verbosity = 2
-        bt = Bitrot(
-            verbosity=verbosity,
-            test=args.test,
-            follow_links=args.follow_links,
-            commit_interval=args.commit_interval,
-            chunk_size=args.chunk_size,
-            workers=args.workers,
-        )
-        if args.fsencoding:
-            FSENCODING = args.fsencoding
-        try:
-            bt.run()
-        except BitrotException as bre:
-            print('error:', bre.args[1], file=sys.stderr)
-            sys.exit(bre.args[0])
+        if not sys.stdin.isatty():
+            data = sys.stdin.read().splitlines()
+            for line in data:
+                if not line:
+                    continue
+                roots.append(line.encode(FSENCODING))
+        else:
+            roots = [b'.']
+
+    verbosity = 1
+    if args.quiet:
+        verbosity = 0
+    elif args.verbose:
+        verbosity = 2
+    bt = Bitrot(
+        verbosity=verbosity,
+        test=args.test,
+        follow_links=args.follow_links,
+        commit_interval=args.commit_interval,
+        chunk_size=args.chunk_size,
+        workers=args.workers,
+    )
+
+    try:
+        bt.run(roots=roots, recursive=not args.no_recursive)
+    except BitrotException as bre:
+        # bre.args[2] may contain list of mismatched files; human message on stderr
+        print('error:', bre.args[1], file=sys.stderr)
+        sys.exit(bre.args[0])
 
 
 if __name__ == '__main__':
