@@ -295,11 +295,11 @@ class Bitrot(object):
         conn.commit()
         self._last_commit_ts = time.time()
 
-    def run(self, roots=None, recursive=True):
-        check_sha512_integrity(verbosity=self.verbosity)
+    def run(self, roots=None, recursive=True, db_dir=b'.'):
+        check_sha512_integrity(verbosity=self.verbosity, db_dir=db_dir)
 
-        bitrot_db = get_path()
-        bitrot_sha512 = get_path(ext=b'sha512')
+        bitrot_db = get_path(directory=db_dir)
+        bitrot_sha512 = get_path(directory=db_dir, ext=b'sha512')
         try:
             conn = get_sqlite3_cursor(bitrot_db, copy=self.test)
         except ValueError:
@@ -404,7 +404,7 @@ class Bitrot(object):
                 missing_paths,
             )
 
-        update_sha512_integrity(verbosity=self.verbosity)
+        update_sha512_integrity(verbosity=self.verbosity, db_dir=db_dir)
 
         if errors:
             # Print plain list of mismatched files to stdout so pipelines can act on it.
@@ -564,8 +564,8 @@ def stable_sum(bitrot_db=None):
     return digest.hexdigest()
 
 
-def check_sha512_integrity(verbosity=1):
-    sha512_path = get_path(ext=b'sha512')
+def check_sha512_integrity(verbosity=1, db_dir=b'.'):
+    sha512_path = get_path(directory=db_dir, ext=b'sha512')
     if not os.path.exists(sha512_path):
         return
 
@@ -575,7 +575,7 @@ def check_sha512_integrity(verbosity=1):
         sys.stderr.flush()
     with open(sha512_path, 'rb') as f:
         old_sha512 = f.read().strip()
-    bitrot_db = get_path()
+    bitrot_db = get_path(directory=db_dir)
     digest = hashlib.sha512()
     with open(bitrot_db, 'rb') as f:
         digest.update(f.read())
@@ -607,13 +607,13 @@ def check_sha512_integrity(verbosity=1):
         print('ok.', file=sys.stderr)
 
 
-def update_sha512_integrity(verbosity=1):
+def update_sha512_integrity(verbosity=1, db_dir=b'.'):
     old_sha512 = 0
-    sha512_path = get_path(ext=b'sha512')
+    sha512_path = get_path(directory=db_dir, ext=b'sha512')
     if os.path.exists(sha512_path):
         with open(sha512_path, 'rb') as f:
             old_sha512 = f.read().strip()
-    bitrot_db = get_path()
+    bitrot_db = get_path(directory=db_dir)
     digest = hashlib.sha512()
     with open(bitrot_db, 'rb') as f:
         digest.update(f.read())
@@ -674,6 +674,9 @@ def run_from_command_line():
         help='override the codec to decode filenames, otherwise taken from '
              'the LANG environment variables')
     parser.add_argument(
+        '--db-dir', default='.',
+        help='directory to store .bitrot.db and .bitrot.sha512 (default: current directory)')
+    parser.add_argument(
         '-n', '--no-recursive', action='store_true',
         help='do not recurse into directories; only check immediate files')
     parser.add_argument(
@@ -684,9 +687,12 @@ def run_from_command_line():
     if args.fsencoding:
         FSENCODING = args.fsencoding
 
+    # db_dir as bytes for internal APIs that expect bytes
+    db_dir = args.db_dir.encode(FSENCODING)
+
     if args.sum:
         try:
-            print(stable_sum())
+            print(stable_sum(bitrot_db=get_path(directory=db_dir)))
         except RuntimeError as e:
             print(str(e).encode('utf8'), file=sys.stderr)
         return
@@ -731,7 +737,7 @@ def run_from_command_line():
     )
 
     try:
-        bt.run(roots=roots, recursive=not args.no_recursive)
+        bt.run(roots=roots, recursive=not args.no_recursive, db_dir=db_dir)
     except BitrotException as bre:
         # bre.args[2] may contain list of mismatched files; human message on stderr
         print('error:', bre.args[1], file=sys.stderr)
