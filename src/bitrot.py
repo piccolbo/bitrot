@@ -277,13 +277,14 @@ class BitrotException(Exception):
 class Bitrot(object):
     def __init__(
         self, verbosity=1, test=False, follow_links=False, commit_interval=300,
-        chunk_size=DEFAULT_CHUNK_SIZE, workers=os.cpu_count(),
+        chunk_size=DEFAULT_CHUNK_SIZE, workers=os.cpu_count(), out0=False,
     ):
         self.verbosity = verbosity
         self.test = test
         self.follow_links = follow_links
         self.commit_interval = commit_interval
         self.chunk_size = chunk_size
+        self.out0 = out0
         self._last_reported_size = ''
         self._last_commit_ts = 0
         self.pool = ProcessPoolExecutor(max_workers=workers)
@@ -411,7 +412,10 @@ class Bitrot(object):
             # Print plain list of mismatched files to stdout so pipelines can act on it.
             for p in errors:
                 # p is Unicode
-                print(p)
+                if self.out0:
+                    sys.stdout.buffer.write(p.encode(FSENCODING) + b'\0')
+                else:
+                    print(p)
             raise BitrotException(
                 1, 'There were {} errors found.'.format(len(errors)), errors,
             )
@@ -547,11 +551,11 @@ def get_path(directory=b'.', ext=b'db'):
     return os.path.join(directory, b'.bitrot.' + ext)
 
 
-def stable_sum(bitrot_db=None):
+def stable_sum(bitrot_db=None, out0=False):
     """Calculates a stable SHA512 of all entries in the database.
 
     Useful for comparing if two directories hold the same data, as it ignores
-    timing information."""
+    timing information. If out0 is True, output is NUL-terminated."""
     if bitrot_db is None:
         bitrot_db = get_path()
     digest = hashlib.sha512()
@@ -562,7 +566,12 @@ def stable_sum(bitrot_db=None):
     while row:
         digest.update(row[0].encode('ascii'))
         row = cur.fetchone()
-    return digest.hexdigest()
+    hexdigest = digest.hexdigest()
+    if out0:
+        sys.stdout.buffer.write(hexdigest.encode('ascii') + b'\0')
+    else:
+        print(hexdigest)
+    return hexdigest
 
 
 def check_sha512_integrity(verbosity=1, db_dir=b'.'):
@@ -681,6 +690,12 @@ def run_from_command_line():
         '-n', '--no-recursive', action='store_true',
         help='do not recurse into directories; only check immediate files')
     parser.add_argument(
+        '--in0', action='store_true',
+        help='read NUL-separated paths from stdin (compatible with find -print0)')
+    parser.add_argument(
+        '--out0', action='store_true',
+        help='output NUL-separated results to stdout (compatible with xargs -0)')
+    parser.add_argument(
         'paths', nargs='*',
         help='files or directories to check; if omitted defaults to current directory; use - to read newline-separated paths from stdin')
     args = parser.parse_args()
@@ -693,7 +708,7 @@ def run_from_command_line():
 
     if args.sum:
         try:
-            print(stable_sum(bitrot_db=get_path(directory=db_dir)))
+            stable_sum(bitrot_db=get_path(directory=db_dir), out0=args.out0)
         except RuntimeError as e:
             print(str(e).encode('utf8'), file=sys.stderr)
         return
@@ -703,23 +718,41 @@ def run_from_command_line():
     roots = []
     if args.paths:
         if len(args.paths) == 1 and args.paths[0] == '-':
-            # Read newline-separated paths from stdin (text)
-            data = sys.stdin.read().splitlines()
-            for line in data:
-                if not line:
-                    continue
-                # preserve as bytes for filesystem ops
-                roots.append(line.encode(FSENCODING))
+            # Read paths from stdin
+            if args.in0:
+                # Read NUL-separated paths from stdin (binary)
+                data = sys.stdin.buffer.read().split(b'\0')
+                for line in data:
+                    if not line:
+                        continue
+                    roots.append(line)
+            else:
+                # Read newline-separated paths from stdin (text)
+                data = sys.stdin.read().splitlines()
+                for line in data:
+                    if not line:
+                        continue
+                    # preserve as bytes for filesystem ops
+                    roots.append(line.encode(FSENCODING))
         else:
             for p in args.paths:
                 roots.append(p.encode(FSENCODING))
     else:
         if not sys.stdin.isatty():
-            data = sys.stdin.read().splitlines()
-            for line in data:
-                if not line:
-                    continue
-                roots.append(line.encode(FSENCODING))
+            if args.in0:
+                # Read NUL-separated paths from stdin (binary)
+                data = sys.stdin.buffer.read().split(b'\0')
+                for line in data:
+                    if not line:
+                        continue
+                    roots.append(line)
+            else:
+                # Read newline-separated paths from stdin (text)
+                data = sys.stdin.read().splitlines()
+                for line in data:
+                    if not line:
+                        continue
+                    roots.append(line.encode(FSENCODING))
         else:
             roots = [b'.']
 
@@ -735,6 +768,7 @@ def run_from_command_line():
         commit_interval=args.commit_interval,
         chunk_size=args.chunk_size,
         workers=args.workers,
+        out0=args.out0,
     )
 
     try:
