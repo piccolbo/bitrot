@@ -551,11 +551,11 @@ def get_path(directory=b'.', ext=b'db'):
     return os.path.join(directory, b'.bitrot.' + ext)
 
 
-def stable_sum(bitrot_db=None, out0=False):
+def stable_sum(bitrot_db=None):
     """Calculates a stable SHA512 of all entries in the database.
 
     Useful for comparing if two directories hold the same data, as it ignores
-    timing information. If out0 is True, output is NUL-terminated."""
+    timing information."""
     if bitrot_db is None:
         bitrot_db = get_path()
     digest = hashlib.sha512()
@@ -566,12 +566,7 @@ def stable_sum(bitrot_db=None, out0=False):
     while row:
         digest.update(row[0].encode('ascii'))
         row = cur.fetchone()
-    hexdigest = digest.hexdigest()
-    if out0:
-        sys.stdout.buffer.write(hexdigest.encode('ascii') + b'\0')
-    else:
-        print(hexdigest)
-    return hexdigest
+    return digest.hexdigest()
 
 
 def check_sha512_integrity(verbosity=1, db_dir=b'.'):
@@ -708,7 +703,11 @@ def run_from_command_line():
 
     if args.sum:
         try:
-            stable_sum(bitrot_db=get_path(directory=db_dir), out0=args.out0)
+            hexdigest = stable_sum(bitrot_db=get_path(directory=db_dir))
+            if args.out0:
+                sys.stdout.buffer.write(hexdigest.encode('ascii') + b'\0')
+            else:
+                print(hexdigest)
         except RuntimeError as e:
             print(str(e).encode('utf8'), file=sys.stderr)
         return
