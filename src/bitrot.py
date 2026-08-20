@@ -70,7 +70,8 @@ def sha1(path, chunk_size):
 
 
 def ts():
-    return datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S%z')
+    # Use timezone-aware UTC now to avoid deprecation warnings in Python 3.14+
+    return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S%z')
 
 
 def get_sqlite3_cursor(path, copy=False):

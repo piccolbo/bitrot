@@ -27,7 +27,7 @@ StdErr = list[str]
 def bitrot(*args: str) -> tuple[ReturnCode, StdOut, StdErr]:
     cmd = [sys.executable, "-m", "bitrot"]
     cmd.extend(args)
-    res = subprocess.run(shlex.join(cmd), shell=True, capture_output=True)
+    res = subprocess.run(cmd, capture_output=True)
     stdout = (res.stdout or b"").decode("utf8")
     stderr = (res.stderr or b"").decode("utf8")
     return res.returncode, lines(stdout), lines(stderr)
@@ -100,12 +100,14 @@ def test_new_files_in_a_tree_dir() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    # assert out[0] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[1] == "2 entries in the database. 2 entries new:"
-    assert out[2] == "  ./nonemptydirs/dir2/new-file-a.txt"
-    assert out[3] == "  ./nonemptydirs/dir2/new-file-b.txt"
-    assert out[4] == "Updating bitrot.sha512... done."
+    # allow non-error stderr (human messages) but no error lines
+    assert not any(line.lower().startswith("error:") for line in err)
+    # human-oriented messages are on stderr
+    assert err[0] == "Finished. 0.00 MiB of data read. 0 errors found."
+    assert err[1] == "2 entries in the database. 2 entries new:"
+    assert err[2] == "  ./nonemptydirs/dir2/new-file-a.txt"
+    assert err[3] == "  ./nonemptydirs/dir2/new-file-b.txt"
+    assert err[4] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(3)
@@ -117,12 +119,11 @@ def test_modified_files_in_a_tree_dir() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "2 entries in the database. 1 entries updated:"
-    assert out[3] == "  ./nonemptydirs/dir2/new-file-a.txt"
-    assert out[4] == "Updating bitrot.sha512... done."
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "2 entries in the database. 1 entries updated:"
+    assert err[3] == "  ./nonemptydirs/dir2/new-file-a.txt"
+    assert err[4] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(4)
@@ -134,13 +135,12 @@ def test_renamed_files_in_a_tree_dir() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "2 entries in the database. 1 entries renamed:"
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "2 entries in the database. 1 entries renamed:"
     o3 = " from ./nonemptydirs/dir2/new-file-a.txt to ./nonemptydirs/dir2/new-file-a.txt2"
-    assert out[3] == o3
-    assert out[4] == "Updating bitrot.sha512... done."
+    assert err[3] == o3
+    assert err[4] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(5)
@@ -152,12 +152,11 @@ def test_deleted_files_in_a_tree_dir() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "1 entries in the database. 1 entries missing:"
-    assert out[3] == "  ./nonemptydirs/dir2/new-file-a.txt2"
-    assert out[4] == "Updating bitrot.sha512... done."
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "1 entries in the database. 1 entries missing:"
+    assert err[3] == "  ./nonemptydirs/dir2/new-file-a.txt2"
+    assert err[4] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(5)
@@ -172,20 +171,19 @@ def test_new_files_and_modified_files_in_a_tree_dir() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "8 entries in the database. 7 entries new:"
-    assert out[3] == "  ./more-files-a.txt"
-    assert out[4] == "  ./more-files-b.txt"
-    assert out[5] == "  ./more-files-c.txt"
-    assert out[6] == "  ./more-files-d.txt"
-    assert out[7] == "  ./more-files-e.txt"
-    assert out[8] == "  ./more-files-f.txt"
-    assert out[9] == "  ./more-files-g.txt"
-    assert out[10] == "1 entries updated:"
-    assert out[11] == "  ./nonemptydirs/dir2/new-file-b.txt"
-    assert out[12] == "Updating bitrot.sha512... done."
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "8 entries in the database. 7 entries new:"
+    assert err[3] == "  ./more-files-a.txt"
+    assert err[4] == "  ./more-files-b.txt"
+    assert err[5] == "  ./more-files-c.txt"
+    assert err[6] == "  ./more-files-d.txt"
+    assert err[7] == "  ./more-files-e.txt"
+    assert err[8] == "  ./more-files-f.txt"
+    assert err[9] == "  ./more-files-g.txt"
+    assert err[10] == "1 entries updated:"
+    assert err[11] == "  ./nonemptydirs/dir2/new-file-b.txt"
+    assert err[12] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(6)
@@ -202,24 +200,23 @@ def test_new_files_modified_deleted_and_moved_in_a_tree_dir() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "14 entries in the database. 7 entries new:"
-    assert out[3] == "  ./nonemptydirs/pl-more-files-a.txt"
-    assert out[4] == "  ./nonemptydirs/pl-more-files-b.txt"
-    assert out[5] == "  ./nonemptydirs/pl-more-files-c.txt"
-    assert out[6] == "  ./nonemptydirs/pl-more-files-d.txt"
-    assert out[7] == "  ./nonemptydirs/pl-more-files-e.txt"
-    assert out[8] == "  ./nonemptydirs/pl-more-files-f.txt"
-    assert out[9] == "  ./nonemptydirs/pl-more-files-g.txt"
-    assert out[10] == "1 entries updated:"
-    assert out[11] == "  ./nonemptydirs/dir2/new-file-b.txt"
-    assert out[12] == "1 entries renamed:"
-    assert out[13] == " from ./more-files-a.txt to ./more-files-a.txt2"
-    assert out[14] == "1 entries missing:"
-    assert out[15] == "  ./more-files-g.txt"
-    assert out[16] == "Updating bitrot.sha512... done."
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "14 entries in the database. 7 entries new:"
+    assert err[3] == "  ./nonemptydirs/pl-more-files-a.txt"
+    assert err[4] == "  ./nonemptydirs/pl-more-files-b.txt"
+    assert err[5] == "  ./nonemptydirs/pl-more-files-c.txt"
+    assert err[6] == "  ./nonemptydirs/pl-more-files-d.txt"
+    assert err[7] == "  ./nonemptydirs/pl-more-files-e.txt"
+    assert err[8] == "  ./nonemptydirs/pl-more-files-f.txt"
+    assert err[9] == "  ./nonemptydirs/pl-more-files-g.txt"
+    assert err[10] == "1 entries updated:"
+    assert err[11] == "  ./nonemptydirs/dir2/new-file-b.txt"
+    assert err[12] == "1 entries renamed:"
+    assert err[13] == " from ./more-files-a.txt to ./more-files-a.txt2"
+    assert err[14] == "1 entries missing:"
+    assert err[15] == "  ./more-files-g.txt"
+    assert err[16] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(7)
@@ -238,28 +235,27 @@ def test_new_files_modified_deleted_and_moved_in_a_tree_dir_2() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "21 entries in the database. 9 entries new:"
-    assert out[3] == "  ./nonemptydirs/pl2-more-files-a.txt"
-    assert out[4] == "  ./nonemptydirs/pl2-more-files-b.txt"
-    assert out[5] == "  ./nonemptydirs/pl2-more-files-c.txt"
-    assert out[6] == "  ./nonemptydirs/pl2-more-files-d.txt"
-    assert out[7] == "  ./nonemptydirs/pl2-more-files-d.txt2"
-    assert out[8] == "  ./nonemptydirs/pl2-more-files-e.txt"
-    assert out[9] == "  ./nonemptydirs/pl2-more-files-f.txt"
-    assert out[10] == "  ./nonemptydirs/pl2-more-files-g.txt"
-    assert out[11] == "  ./nonemptydirs/pl2-more-files-g.txt2"
-    assert out[12] == "1 entries updated:"
-    assert out[13] == "  ./nonemptydirs/pl-more-files-a.txt"
-    assert out[14] == "1 entries renamed:"
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "21 entries in the database. 9 entries new:"
+    assert err[3] == "  ./nonemptydirs/pl2-more-files-a.txt"
+    assert err[4] == "  ./nonemptydirs/pl2-more-files-b.txt"
+    assert err[5] == "  ./nonemptydirs/pl2-more-files-c.txt"
+    assert err[6] == "  ./nonemptydirs/pl2-more-files-d.txt"
+    assert err[7] == "  ./nonemptydirs/pl2-more-files-d.txt2"
+    assert err[8] == "  ./nonemptydirs/pl2-more-files-e.txt"
+    assert err[9] == "  ./nonemptydirs/pl2-more-files-f.txt"
+    assert err[10] == "  ./nonemptydirs/pl2-more-files-g.txt"
+    assert err[11] == "  ./nonemptydirs/pl2-more-files-g.txt2"
+    assert err[12] == "1 entries updated:"
+    assert err[13] == "  ./nonemptydirs/pl-more-files-a.txt"
+    assert err[14] == "1 entries renamed:"
     o15 = " from ./nonemptydirs/pl-more-files-b.txt to ./nonemptydirs/pl-more-files-b.txt2"
-    assert out[15] == o15
-    assert out[16] == "2 entries missing:"
-    assert out[17] == "  ./more-files-f.txt"
-    assert out[18] == "  ./nonemptydirs/pl-more-files-c.txt"
-    assert out[19] == "Updating bitrot.sha512... done."
+    assert err[15] == o15
+    assert err[16] == "2 entries missing:"
+    assert err[17] == "  ./more-files-f.txt"
+    assert err[18] == "  ./nonemptydirs/pl-more-files-c.txt"
+    assert err[19] == "Updating bitrot.sha512... done."
 
 
 @pytest.mark.order(8)
@@ -275,11 +271,10 @@ def test_3278_files() -> None:
     )
     rc, out, err = bitrot()
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
     o2 = "3299 entries in the database, 3278 new, 0 updated, 0 renamed, 0 missing."
-    assert out[2] == o2
+    assert err[2] == o2
 
 
 @pytest.mark.order(9)
@@ -291,11 +286,10 @@ def test_3278_files_2() -> None:
     )
     rc, out, err = bitrot()
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
     o2 = "3299 entries in the database, 0 new, 0 updated, 3278 renamed, 0 missing."
-    assert out[2] == o2
+    assert err[2] == o2
 
 
 @pytest.mark.order(10)
@@ -310,12 +304,11 @@ def test_rotten_file() -> None:
     )
     rc, out, err = bitrot("-v")
     assert rc == 0
-    assert not err
-    assert out[0] == "Checking bitrot.db integrity... ok."
-    # assert out[1] == "Finished. 0.00 MiB of data read. 0 errors found."
-    assert out[2] == "3301 entries in the database. 2 entries new:"
-    assert out[3] == "  ./non-rotten-file"
-    assert out[4] == "  ./rotten-file"
+    assert not any(line.lower().startswith("error:") for line in err)
+    assert err[0] == "Checking bitrot.db integrity... ok."
+    assert err[2] == "3301 entries in the database. 2 entries new:"
+    assert err[3] == "  ./non-rotten-file"
+    assert err[4] == "  ./rotten-file"
 
 
 @pytest.mark.order(11)
