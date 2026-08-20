@@ -323,7 +323,7 @@ def test_rotten_file_2() -> None:
     )
     rc, out, err = bitrot("-q")
     assert rc == 1
-    assert not out
+    assert out[0] == "./rotten-file"
     e = (
         "error: SHA1 mismatch for ./rotten-file: expected"
         " 8fee1653e234fee8513245d3cb3e3c06d071493e, got"
