@@ -33,6 +33,16 @@ def bitrot(*args: str) -> tuple[ReturnCode, StdOut, StdErr]:
     return res.returncode, lines(stdout), lines(stderr)
 
 
+def bitrot_bytes(*args: str) -> tuple[ReturnCode, bytes, StdErr]:
+    """Run bitrot and return raw stdout bytes along with decoded stderr lines."""
+    cmd = [sys.executable, "-m", "bitrot"]
+    cmd.extend(args)
+    res = subprocess.run(cmd, capture_output=True)
+    stdout_bytes = res.stdout or b""
+    stderr = (res.stderr or b"").decode("utf8")
+    return res.returncode, stdout_bytes, lines(stderr)
+
+
 def bash(script, empty_dir: bool = False) -> bool:
     username = getpass.getuser()
     test_dir = TMP / f"bitrot-dir-{username}"
@@ -330,6 +340,20 @@ def test_rotten_file_2() -> None:
     )
     assert err[0].startswith(e)
     assert err[1] == "error: There were 1 errors found."
+
+
+@pytest.mark.order(12)
+def test_out0_sum() -> None:
+    # --sum with --out0 should write the ASCII hex digest followed by a NUL byte
+    rc, out_bytes, err = bitrot_bytes("--sum", "--out0")
+    assert rc == 0
+    assert not err
+    # stdout should be ASCII hex followed by NUL
+    assert out_bytes.endswith(b"\0")
+    hexstr = out_bytes.rstrip(b"\0").decode("ascii")
+    assert len(hexstr) == 128
+    # basic hex check
+    int(hexstr, 16)
 
 
 @pytest.mark.order("last")
