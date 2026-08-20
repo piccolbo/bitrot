@@ -1,2 +1,5 @@
 .bitrot.db
 .bitrot.sha512
+/src/__pycache__
+/src/bitrot.egg-info
+/tests/__pycache__
